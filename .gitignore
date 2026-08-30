@@ -1,0 +1,12 @@
+node_modules/
+
+# Secret thật, không phải placeholder — xem README mục "An toàn"
+.env
+.env.local
+.env.*.local
+
+# Cache skill của công cụ AI hỗ trợ code (Claude/Windsurf), không phải mã nguồn dự án
+.agents/
+.claude/
+.windsurf/
+skills-lock.json

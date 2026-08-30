@@ -1,0 +1,224 @@
+// Schema được dựng lại từ toàn bộ câu SQL của bản MySQL cũ.
+// Quy ước: model/field dùng camelCase cho đúng chuẩn Prisma, @map giữ tên cột
+// snake_case để hợp đồng API với frontend và thiết bị IoT không đổi.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  teacher
+  admin
+}
+
+// ---------------------------------------------------------------
+// Người dùng hệ thống
+// ---------------------------------------------------------------
+
+model Teacher {
+  // Mã giáo viên do trường cấp (vd "GV001"). Trước đây cột này chứa
+  // sub UUID của Cognito; sau khi bỏ Amplify thì dùng mã thật.
+  teacherId   String  @id @map("teacher_id") @db.VarChar(64)
+  fullName    String  @map("full_name") @db.VarChar(255)
+  email       String  @unique @db.VarChar(255)
+  phoneNumber String? @map("phone_number") @db.VarChar(20)
+
+  // Xác thực nội bộ (thay Cognito)
+  passwordHash String?   @map("password_hash") @db.VarChar(60)
+  role         Role      @default(teacher)
+  isActive     Boolean   @default(true) @map("is_active")
+  lastLoginAt  DateTime? @map("last_login_at")
+
+  // Các trường trước đây nằm ở Cognito custom attributes (Profile.jsx đọc)
+  birthdate  DateTime? @db.Date
+  address    String?   @db.VarChar(255)
+  position   String?   @db.VarChar(100)
+  department String?   @db.VarChar(100)
+  experience String?   @db.VarChar(255)
+  education  String?   @db.VarChar(255)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  subjects      Subject[]
+  schedules     Schedule[]
+  refreshTokens RefreshToken[]
+
+  @@map("teacher")
+}
+
+model RefreshToken {
+  id        BigInt    @id @default(autoincrement())
+  teacherId String    @map("teacher_id") @db.VarChar(64)
+  // Lưu SHA-256 của token: rò rỉ DB cũng không tái sử dụng được phiên.
+  tokenHash String    @unique @map("token_hash") @db.Char(64)
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  userAgent String?   @map("user_agent") @db.VarChar(255)
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  teacher Teacher @relation(fields: [teacherId], references: [teacherId], onDelete: Cascade)
+
+  @@index([teacherId])
+  @@index([expiresAt])
+  @@map("refresh_token")
+}
+
+// ---------------------------------------------------------------
+// Dữ liệu nghiệp vụ
+// ---------------------------------------------------------------
+
+model Student {
+  studentId   String  @id @map("student_id") @db.VarChar(32)
+  fullName    String  @map("full_name") @db.VarChar(255)
+  email       String? @db.VarChar(255)
+  phoneNumber String? @map("phone_number") @db.VarChar(20)
+  status      String  @default("active") @db.VarChar(20)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  classes     ClassStudent[]
+  subjects    SubjectStudent[]
+  attendances Attendance[]
+
+  @@index([fullName])
+  @@map("student")
+}
+
+model Class {
+  // Mã lớp dạng "D22CQCI01-N" — thiết bị ESP32-CAM dùng đúng chuỗi này
+  // để dựng collection Rekognition ("attendance-system-" + classId).
+  classId          String @id @map("class_id") @db.VarChar(32)
+  name             String @db.VarChar(255)
+  numberOfStudents Int    @default(0) @map("number_of_students")
+  status           String @default("active") @db.VarChar(20)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  students ClassStudent[]
+  subjects SubjectClass[]
+
+  @@map("class")
+}
+
+model Subject {
+  subjectId String  @id @map("subject_id") @db.VarChar(32)
+  name      String  @db.VarChar(255)
+  teacherId String? @map("teacher_id") @db.VarChar(64)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  teacher     Teacher?         @relation(fields: [teacherId], references: [teacherId], onDelete: SetNull)
+  students    SubjectStudent[]
+  classes     SubjectClass[]
+  schedules   Schedule[]
+  attendances Attendance[]
+
+  @@index([teacherId])
+  @@map("subject")
+}
+
+model Schedule {
+  id        Int     @id @default(autoincrement())
+  subjectId String  @map("subject_id") @db.VarChar(32)
+  teacherId String? @map("teacher_id") @db.VarChar(64)
+
+  // Ngày tách thành 3 cột vì thiết bị ESP32 gửi lên đúng dạng này
+  // (websocketSendSchedule gửi day/month/year rời).
+  day       Int
+  month     Int
+  year      Int
+  dayOfWeek String @map("day_of_week") @db.VarChar(16)
+
+  room      String @db.VarChar(64)
+  startTime String @map("start_time") @db.VarChar(5) // "HH:MM"
+  endTime   String @map("end_time") @db.VarChar(5)
+  status    String @default("scheduled") @db.VarChar(20)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  subject Subject  @relation(fields: [subjectId], references: [subjectId], onDelete: Cascade)
+  teacher Teacher? @relation(fields: [teacherId], references: [teacherId], onDelete: SetNull)
+
+  @@index([teacherId])
+  @@index([year, month, day])
+  @@map("schedule")
+}
+
+model Attendance {
+  id        Int    @id @default(autoincrement())
+  studentId String @map("student_id") @db.VarChar(32)
+  subjectId String @map("subject_id") @db.VarChar(32)
+
+  time      String @db.VarChar(5) // "HH:MM" do ESP32-CAM gửi kèm ảnh
+  day       Int
+  month     Int
+  year      Int
+  dayOfWeek String @map("day_of_week") @db.VarChar(16)
+
+  status Int    @default(0) // 1 = có mặt, 0 = vắng (giữ nguyên contract cũ)
+  remark String @default("Absent") @db.VarChar(32) // On Time | Late | Absent
+
+  // S3 key ảnh ESP32-CAM chụp lúc điểm danh (history/<class_id>/<ngày>/<giờ>.jpg).
+  // Nullable vì các bản ghi tạo trước tính năng này không có ảnh.
+  imageKey String? @map("image_key") @db.VarChar(255)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  student Student @relation(fields: [studentId], references: [studentId], onDelete: Cascade)
+  subject Subject @relation(fields: [subjectId], references: [subjectId], onDelete: Cascade)
+
+  // Chỉ mục phục vụ ORDER BY year/month/day mà mọi query điểm danh đều dùng.
+  @@index([year(sort: Desc), month(sort: Desc), day(sort: Desc)])
+  @@index([studentId])
+  @@index([subjectId])
+  @@map("attendance")
+}
+
+// ---------------------------------------------------------------
+// Bảng nối
+// ---------------------------------------------------------------
+
+model ClassStudent {
+  classId   String @map("class_id") @db.VarChar(32)
+  studentId String @map("student_id") @db.VarChar(32)
+
+  class   Class   @relation(fields: [classId], references: [classId], onDelete: Cascade)
+  student Student @relation(fields: [studentId], references: [studentId], onDelete: Cascade)
+
+  @@id([classId, studentId])
+  @@index([studentId])
+  @@map("class_student")
+}
+
+model SubjectStudent {
+  subjectId String @map("subject_id") @db.VarChar(32)
+  studentId String @map("student_id") @db.VarChar(32)
+
+  subject Subject @relation(fields: [subjectId], references: [subjectId], onDelete: Cascade)
+  student Student @relation(fields: [studentId], references: [studentId], onDelete: Cascade)
+
+  @@id([subjectId, studentId])
+  @@index([studentId])
+  @@map("subject_student")
+}
+
+model SubjectClass {
+  subjectId String @map("subject_id") @db.VarChar(32)
+  classId   String @map("class_id") @db.VarChar(32)
+
+  subject Subject @relation(fields: [subjectId], references: [subjectId], onDelete: Cascade)
+  class   Class   @relation(fields: [classId], references: [classId], onDelete: Cascade)
+
+  @@id([subjectId, classId])
+  @@index([classId])
+  @@map("subject_class")
+}

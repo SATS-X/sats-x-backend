@@ -1,0 +1,61 @@
+# Dùng trên EC2 (production/demo) — khác docker-compose.yml (chỉ Postgres, dùng
+# lúc dev cục bộ). Postgres ở đây KHÔNG map port ra host: chỉ container `app`
+# trong cùng network nội bộ mới với tới được, an toàn hơn khi EC2 có IP công khai.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: attendance-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: attendance_system
+    volumes:
+      - attendance_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d attendance_system']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    container_name: attendance-be
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PORT: 4000
+      NODE_ENV: production
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      DATABASE_URL: postgresql://postgres:${DB_PASSWORD}@postgres:5432/attendance_system?schema=public
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      JWT_ACCESS_TTL: 15m
+      JWT_REFRESH_TTL_DAYS: 7
+      # Thiếu dòng này thì requireServiceToken trả 500 ServerMisconfigured cho
+      # MỌI request /api/device/* — Lambda schedule/attendance không lấy được
+      # thời khoá biểu, ESP32-CAM không có class_id nên không bao giờ gửi ảnh
+      # điểm danh đi. Giá trị phải trùng backend_service_token bên Terraform.
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+    ports:
+      - '4000:4000'
+
+  # Frontend đã build tĩnh (npm run build ở máy dev, scp dist/ sang EC2) — không
+  # build node bên trong container vì t3.micro chỉ có ~900MB RAM, npm ci + vite
+  # build dễ bị OOM-killed khi chạy song song với app + postgres đang sống.
+  web:
+    image: nginx:1.27-alpine
+    container_name: attendance-web
+    restart: unless-stopped
+    depends_on:
+      - app
+    volumes:
+      - ../frontend/dist:/usr/share/nginx/html:ro
+      - ../frontend/deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - '80:80'
+
+volumes:
+  attendance_pg_data:
