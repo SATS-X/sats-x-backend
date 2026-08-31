@@ -1,14 +1,14 @@
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: attendance-pg
+    container_name: sats-x-postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: devpw
       POSTGRES_DB: attendance_system
     ports:
-      # Cổng 15432 để không đụng Postgres có sẵn trên máy.
+      # Port 15432 avoids conflicts with an existing local PostgreSQL service.
       - '15432:5432'
     volumes:
       - attendance_pg_data:/var/lib/postgresql/data
